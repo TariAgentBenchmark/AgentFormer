@@ -4,6 +4,8 @@ def compute_motion_mse(data, cfg):
     diff = data['fut_motion_orig'] - data['train_dec_motion']
     if cfg.get('mask', True):
         mask = data['fut_mask']
+        if data.get('object_mask') is not None:
+            mask = mask * data['object_mask'].unsqueeze(1)
         diff *= mask.unsqueeze(2)
     loss_unweighted = diff.pow(2).sum() 
     if cfg.get('normalize', True):
@@ -25,6 +27,8 @@ def compute_sample_loss(data, cfg):
     diff = data['infer_dec_motion'] - data['fut_motion_orig'].unsqueeze(1)
     if cfg.get('mask', True):
         mask = data['fut_mask'].unsqueeze(1).unsqueeze(-1)
+        if data.get('object_mask') is not None:
+            mask = mask * data['object_mask'].unsqueeze(1).unsqueeze(1).unsqueeze(-1)
         diff *= mask
     dist = diff.pow(2).sum(dim=-1).sum(dim=-1)
     loss_unweighted = dist.min(dim=1)[0]

@@ -1,0 +1,31 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.swp
+*.swo
+
+# Python envs
+.env
+.venv
+venv/
+env/
+
+# Logs and checkpoints
+logs/
+log/
+*.log
+results/
+
+# Byte-compiled cache
+*/__pycache__/
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Data/artifacts
+datasets/
+*.zip
+*.tar
+*.tar.gz

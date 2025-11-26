@@ -23,12 +23,17 @@ def get_model_prediction(data, sample_k):
 def save_prediction(pred, data, suffix, save_dir):
     pred_num = 0
     pred_arr = []
-    fut_data, seq_name, frame, valid_id, pred_mask = data['fut_data'], data['seq'], data['frame'], data['valid_id'], data['pred_mask']
+    fut_data, seq_name, frame = data['fut_data'], data['seq'], data['frame']
+    agent_ids = data.get('agent_ids', data['valid_id'])
+    subject_index = data.get('subject_index', 0)
+    target_ids = data.get('object_ids', [agent_ids[i] for i in range(len(agent_ids)) if i != subject_index])
+    pred_mask = data['pred_mask']
 
-    for i in range(len(valid_id)):    # number of agents
-        identity = valid_id[i]
-        if pred_mask is not None and pred_mask[i] != 1.0:
+    for i, identity in enumerate(target_ids):    # number of agents
+        orig_idx = i if i < subject_index else i + 1
+        if pred_mask is not None and pred_mask[orig_idx] != 1.0:
             continue
+        most_recent_data = None
 
         """future frames"""
         for j in range(cfg.future_frames):
@@ -143,5 +148,3 @@ if __name__ == '__main__':
             # remove eval folder to save disk space
             if args.cleanup:
                 shutil.rmtree(save_dir)
-
-

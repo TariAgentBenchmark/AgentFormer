@@ -162,16 +162,33 @@ class preprocess(object):
         valid_id = self.get_valid_id(pre_data, fut_data)
         if len(pre_data[0]) == 0 or len(fut_data[0]) == 0 or len(valid_id) == 0:
             return None
+        # need at least one subject + one object
+        if len(valid_id) < 2:
+            return None
 
+        # choose a subject and reorder ids so subject is index 0
+        subject_id = np.random.choice(valid_id)
+        agent_ids = [subject_id] + [idx for idx in valid_id if idx != subject_id]
+
+        pre_motion_3D, pre_motion_mask = self.PreMotion(pre_data, agent_ids)
+        fut_motion_3D, fut_motion_mask = self.FutureMotion(fut_data, agent_ids)
         if self.dataset == 'nuscenes_pred':
-            pred_mask = self.get_pred_mask(pre_data[0], valid_id)
-            heading = self.get_heading(pre_data[0], valid_id)
+            pred_mask_raw = self.get_pred_mask(pre_data[0], valid_id)
+            heading_raw = self.get_heading(pre_data[0], valid_id)
+            # reorder pred mask/heading to match agent_ids
+            id_to_idx = {idx: i for i, idx in enumerate(valid_id)}
+            pred_mask = np.asarray([pred_mask_raw[id_to_idx[idx]] for idx in agent_ids])
+            heading = np.asarray([heading_raw[id_to_idx[idx]] for idx in agent_ids])
         else:
             pred_mask = None
             heading = None
 
-        pre_motion_3D, pre_motion_mask = self.PreMotion(pre_data, valid_id)
-        fut_motion_3D, fut_motion_mask = self.FutureMotion(fut_data, valid_id)
+        # record subject future observations (first K frames)
+        subj_future_obs_frames = min(self.parser.get('subject_future_frames', 6), self.future_frames)
+        subject_future_obs = fut_motion_3D[0][:subj_future_obs_frames].clone()
+        subject_future_mask = torch.ones(subj_future_obs_frames)
+        # mask out subject future beyond observed portion to exclude from loss
+        fut_motion_mask[0][subj_future_obs_frames:] = 0.0
 
         data = {
             'pre_motion_3D': pre_motion_3D,
@@ -181,7 +198,12 @@ class preprocess(object):
             'pre_data': pre_data,
             'fut_data': fut_data,
             'heading': heading,
-            'valid_id': valid_id,
+            'valid_id': agent_ids,
+            'object_ids': agent_ids[1:],
+            'agent_ids': agent_ids,
+            'subject_index': 0,
+            'subject_future_obs': subject_future_obs,
+            'subject_future_mask': subject_future_mask,
             'traj_scale': self.traj_scale,
             'pred_mask': pred_mask,
             'scene_map': self.geom_scene_map,

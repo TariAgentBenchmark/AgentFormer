@@ -305,6 +305,9 @@ class FutureDecoder(nn.Module):
 
     def decode_traj_ar(self, data, mode, context, pre_motion, pre_vel, pre_motion_scene_norm, z, sample_num, need_weights=False):
         agent_num = data['agent_num']
+        subject_idx = data.get('subject_idx', None)
+        subject_future = data.get('subject_future_scene_norm', None)
+        subject_future_len = data.get('subject_future_len', 0)
         if self.pred_type == 'vel':
             dec_in = pre_vel[[-1]]
         elif self.pred_type == 'pos':
@@ -353,6 +356,10 @@ class FutureDecoder(nn.Module):
                     norm_motion = rotation_2d_torch(norm_motion, angles)[0]
                 seq_out = norm_motion + pre_motion_scene_norm[[-1]]
                 seq_out = seq_out.view(tf_out.shape[0], -1, seq_out.shape[-1])
+            if subject_future is not None and subject_idx is not None and i < subject_future_len:
+                subj_pos = subject_future[i]
+                subj_pos = subj_pos.unsqueeze(0).repeat(sample_num, 1)
+                seq_out[-agent_num + subject_idx] = subj_pos
             if self.ar_detach:
                 out_in = seq_out[-agent_num:].clone().detach()
             else:
@@ -514,11 +521,23 @@ class AgentFormer(nn.Module):
         self.data = defaultdict(lambda: None)
         self.data['batch_size'] = len(in_data['pre_motion_3D'])
         self.data['agent_num'] = len(in_data['pre_motion_3D'])
+        self.data['subject_idx'] = in_data.get('subject_index', 0)
         self.data['pre_motion'] = torch.stack(in_data['pre_motion_3D'], dim=0).to(device).transpose(0, 1).contiguous()
         self.data['fut_motion'] = torch.stack(in_data['fut_motion_3D'], dim=0).to(device).transpose(0, 1).contiguous()
         self.data['fut_motion_orig'] = torch.stack(in_data['fut_motion_3D'], dim=0).to(device)   # future motion without transpose
         self.data['fut_mask'] = torch.stack(in_data['fut_motion_mask'], dim=0).to(device)
         self.data['pre_mask'] = torch.stack(in_data['pre_motion_mask'], dim=0).to(device)
+        object_mask = torch.ones(self.data['agent_num'], device=device, dtype=torch.bool)
+        object_mask[self.data['subject_idx']] = False
+        self.data['object_mask'] = object_mask
+        subject_future_obs = in_data.get('subject_future_obs', None)
+        if subject_future_obs is not None:
+            self.data['subject_future_obs'] = torch.as_tensor(subject_future_obs, dtype=torch.float32, device=device)
+            subj_mask_np = in_data.get('subject_future_mask', None)
+            if subj_mask_np is None:
+                subj_mask_np = torch.ones(self.data['subject_future_obs'].shape[0])
+            self.data['subject_future_mask'] = torch.as_tensor(subj_mask_np, dtype=torch.float32, device=device)
+            self.data['subject_future_len'] = self.data['subject_future_obs'].shape[0]
         scene_orig_all_past = self.cfg.get('scene_orig_all_past', False)
         if scene_orig_all_past:
             self.data['scene_orig'] = self.data['pre_motion'].view(-1, 2).mean(dim=0)
@@ -537,10 +556,17 @@ class AgentFormer(nn.Module):
                 self.data[f'{key}'], self.data[f'{key}_scene_norm'] = rotation_2d_torch(self.data[key], theta, self.data['scene_orig'])
             if in_data['heading'] is not None:
                 self.data['heading'] += theta
+            if subject_future_obs is not None:
+                subj_rot, subj_norm = rotation_2d_torch(self.data['subject_future_obs'], theta, self.data['scene_orig'])
+                self.data['subject_future'] = subj_rot
+                self.data['subject_future_scene_norm'] = subj_norm
         else:
             theta = torch.zeros(1).to(device)
             for key in ['pre_motion', 'fut_motion', 'fut_motion_orig']:
                 self.data[f'{key}_scene_norm'] = self.data[key] - self.data['scene_orig']   # normalize per scene
+            if subject_future_obs is not None:
+                self.data['subject_future'] = self.data['subject_future_obs']
+                self.data['subject_future_scene_norm'] = self.data['subject_future_obs'] - self.data['scene_orig']
 
         self.data['pre_vel'] = self.data['pre_motion'][1:] - self.data['pre_motion'][:-1, :]
         self.data['fut_vel'] = self.data['fut_motion'] - torch.cat([self.data['pre_motion'][[-1]], self.data['fut_motion'][:-1, :]])
@@ -605,7 +631,12 @@ class AgentFormer(nn.Module):
             sample_num = 1
             self.future_encoder(self.data)
         self.future_decoder(self.data, mode=mode, sample_num=sample_num, autoregress=True, need_weights=need_weights)
-        return self.data[f'{mode}_dec_motion'], self.data
+        dec_motion = self.data[f'{mode}_dec_motion']
+        object_mask = self.data.get('object_mask', None)
+        if object_mask is not None:
+            obj_idx = object_mask.nonzero(as_tuple=False).squeeze(-1)
+            dec_motion = dec_motion[obj_idx]
+        return dec_motion, self.data
 
     def compute_loss(self):
         total_loss = 0
