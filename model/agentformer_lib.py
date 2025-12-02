@@ -8,6 +8,7 @@ import math
 import copy
 
 import torch
+from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.functional import *
 from torch.nn.modules.module import Module
@@ -15,13 +16,14 @@ from torch.nn.modules.activation import MultiheadAttention
 from torch.nn.modules.container import ModuleList
 from torch.nn.init import xavier_uniform_
 from torch.nn.modules.dropout import Dropout
-from torch.nn.modules.linear import Linear, _LinearWithBias
+from torch.nn import Linear
 from torch.nn.modules.normalization import LayerNorm
 from torch.nn.init import xavier_uniform_
 from torch.nn.init import constant_
 from torch.nn.init import xavier_normal_
 from torch.nn.parameter import Parameter
 from torch.overrides import has_torch_function, handle_torch_function
+from typing import Optional, Tuple
 
 
 def agent_aware_attention(query: Tensor,
@@ -401,7 +403,7 @@ class AgentAwareAttention(Module):
             self.in_proj_bias = Parameter(torch.empty(3 * embed_dim))
         else:
             self.register_parameter('in_proj_bias', None)
-        self.out_proj = _LinearWithBias(embed_dim, embed_dim)
+        self.out_proj = Linear(embed_dim, embed_dim, bias=True)
 
         if add_bias_kv:
             self.bias_k = Parameter(torch.empty(1, 1, embed_dim))
