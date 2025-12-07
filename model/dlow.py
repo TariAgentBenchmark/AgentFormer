@@ -20,6 +20,8 @@ def compute_z_kld(data, cfg):
 def diversity_loss(data, cfg):
     loss_unweighted = 0
     fut_motions = data['infer_dec_motion'].view(*data['infer_dec_motion'].shape[:2], -1)
+    if data.get('object_mask') is not None:
+        fut_motions = fut_motions[data['object_mask']]
     for motion in fut_motions:
         dist = F.pdist(motion, 2) ** 2
         loss_unweighted += (-dist / cfg['d_scale']).exp().mean()
@@ -33,6 +35,9 @@ def recon_loss(data, cfg):
     diff = data['infer_dec_motion'] - data['fut_motion_orig'].unsqueeze(1)
     if cfg.get('mask', True):
         mask = data['fut_mask'].unsqueeze(1).unsqueeze(-1)
+        if data.get('object_mask') is not None:
+            obj_mask = data['object_mask'].float().view(-1, 1, 1, 1)
+            mask = mask * obj_mask
         diff *= mask
     dist = diff.pow(2).sum(dim=-1).sum(dim=-1)
     loss_unweighted = dist.min(dim=1)[0]
@@ -124,6 +129,9 @@ class DLow(nn.Module):
         res = self.data[f'infer_dec_motion']
         if mode == 'recon':
             res = res[:, 0]
+        object_mask = self.data.get('object_mask')
+        if object_mask is not None:
+            res = res[object_mask]
         return res, self.data
 
     def compute_loss(self):

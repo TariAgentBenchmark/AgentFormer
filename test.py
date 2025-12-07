@@ -20,22 +20,37 @@ def get_model_prediction(data, sample_k):
     sample_motion_3D = sample_motion_3D.transpose(0, 1).contiguous()
     return recon_motion_3D, sample_motion_3D
 
-def save_prediction(pred, data, suffix, save_dir):
+def save_prediction(pred, data, suffix, save_dir, include_subject=False):
     pred_num = 0
     pred_arr = []
     fut_data, seq_name, frame = data['fut_data'], data['seq'], data['frame']
     agent_ids = data.get('agent_ids', data['valid_id'])
     subject_index = data.get('subject_index', 0)
-    target_ids = data.get('object_ids', [agent_ids[i] for i in range(len(agent_ids)) if i != subject_index])
     pred_mask = data['pred_mask']
 
+    if include_subject:
+        target_ids = agent_ids
+        pred_indices = list(range(len(agent_ids)))
+        mask_indices = pred_indices
+    else:
+        target_ids = data.get('object_ids', [agent_ids[i] for i in range(len(agent_ids)) if i != subject_index])
+        pred_indices = list(range(len(target_ids)))
+        mask_indices = []
+        for i in range(len(target_ids)):
+            orig_idx = i if i < subject_index else i + 1
+            mask_indices.append(orig_idx)
+
+    assert pred.shape[0] >= len(target_ids), "Prediction size must cover all target agents"
+
     for i, identity in enumerate(target_ids):    # number of agents
-        orig_idx = i if i < subject_index else i + 1
+        pred_idx = pred_indices[i]
+        orig_idx = mask_indices[i]
         if pred_mask is not None and pred_mask[orig_idx] != 1.0:
             continue
         most_recent_data = None
 
         """future frames"""
+        traj = pred[pred_idx]
         for j in range(cfg.future_frames):
             cur_data = fut_data[j]
             if len(cur_data) > 0 and identity in cur_data[:, 1]:
@@ -43,7 +58,7 @@ def save_prediction(pred, data, suffix, save_dir):
             else:
                 data = most_recent_data.copy()
                 data[0] = frame + j + 1
-            data[[13, 15]] = pred[i, j].cpu().numpy()   # [13, 15] corresponds to 2D pos
+            data[[13, 15]] = traj[j].cpu().numpy()   # [13, 15] corresponds to 2D pos
             most_recent_data = data.copy()
             pred_arr.append(data)
         pred_num += 1
@@ -58,7 +73,7 @@ def save_prediction(pred, data, suffix, save_dir):
         np.savetxt(fname, pred_arr, fmt="%.3f")
     return pred_num
 
-def test_model(generator, save_dir, cfg):
+def test_model(generator, save_dir, cfg, include_subject=False):
     total_num_pred = 0
     while not generator.is_epoch_end():
         data = generator()
@@ -74,14 +89,24 @@ def test_model(generator, save_dir, cfg):
             recon_motion_3D, sample_motion_3D = get_model_prediction(data, cfg.sample_k)
         recon_motion_3D, sample_motion_3D = recon_motion_3D * cfg.traj_scale, sample_motion_3D * cfg.traj_scale
 
+        if include_subject:
+            subject_idx = data.get('subject_index', 0)
+            subject_traj = gt_motion_3D[subject_idx].unsqueeze(0)
+            recon_motion_eval = torch.cat([subject_traj, recon_motion_3D], dim=0)
+            subj_sample = subject_traj.unsqueeze(0).repeat(sample_motion_3D.shape[0], 1, 1, 1)
+            sample_motion_eval = torch.cat([subj_sample, sample_motion_3D], dim=1)
+        else:
+            recon_motion_eval = recon_motion_3D
+            sample_motion_eval = sample_motion_3D
+
         """save samples"""
         recon_dir = os.path.join(save_dir, 'recon'); mkdir_if_missing(recon_dir)
         sample_dir = os.path.join(save_dir, 'samples'); mkdir_if_missing(sample_dir)
         gt_dir = os.path.join(save_dir, 'gt'); mkdir_if_missing(gt_dir)
-        for i in range(sample_motion_3D.shape[0]):
-            save_prediction(sample_motion_3D[i], data, f'/sample_{i:03d}', sample_dir)
-        save_prediction(recon_motion_3D, data, '', recon_dir)        # save recon
-        num_pred = save_prediction(gt_motion_3D, data, '', gt_dir)              # save gt
+        for i in range(sample_motion_eval.shape[0]):
+            save_prediction(sample_motion_eval[i], data, f'/sample_{i:03d}', sample_dir, include_subject=include_subject)
+        save_prediction(recon_motion_eval, data, '', recon_dir, include_subject=include_subject)        # save recon
+        num_pred = save_prediction(gt_motion_3D, data, '', gt_dir, include_subject=include_subject)              # save gt
         total_num_pred += num_pred
 
     print_log(f'\n\n total_num_pred: {total_num_pred}', log)
@@ -102,6 +127,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--cached', action='store_true', default=False)
     parser.add_argument('--cleanup', action='store_true', default=False)
+    parser.add_argument('--include_subject_eval', action='store_true', default=False, help='Include subject trajectory when saving predictions for evaluation')
     args = parser.parse_args()
 
     """ setup """
@@ -139,7 +165,7 @@ if __name__ == '__main__':
             save_dir = f'{cfg.result_dir}/epoch_{epoch:04d}/{split}'; mkdir_if_missing(save_dir)
             eval_dir = f'{save_dir}/samples'
             if not args.cached:
-                test_model(generator, save_dir, cfg)
+                test_model(generator, save_dir, cfg, include_subject=args.include_subject_eval)
 
             log_file = os.path.join(cfg.log_dir, 'log_eval.txt')
             cmd = f"python eval.py --dataset {cfg.dataset} --results_dir {eval_dir} --data {split} --log {log_file}"
