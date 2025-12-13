@@ -6,3 +6,4 @@ pyyaml
 easydict
 nuscenes-devkit
 torch
+matplotlib

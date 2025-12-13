@@ -73,8 +73,80 @@ def save_prediction(pred, data, suffix, save_dir, include_subject=False):
         np.savetxt(fname, pred_arr, fmt="%.3f")
     return pred_num
 
-def test_model(generator, save_dir, cfg, include_subject=False):
+def plot_error_ellipse(data, gt_motion, sample_motion, save_path, include_subject=False, alpha_level=0.95):
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.patches import Ellipse
+    except ImportError as exc:
+        raise RuntimeError("Plotting requires matplotlib. Install via `uv pip install matplotlib`.") from exc
+    if not hasattr(np, 'Inf'):
+        np.Inf = np.inf
+
+    agent_ids = data.get('agent_ids', data['valid_id'])
+    subject_index = data.get('subject_index', 0)
+    K = sample_motion.shape[0]
+    # equal weights
+    p = np.ones(K, dtype=np.float64) / K
+
+    if include_subject:
+        pairs = [(i, i, agent_ids[i]) for i in range(len(agent_ids))]
+    else:
+        object_ids = data.get('object_ids', [agent_ids[i] for i in range(len(agent_ids)) if i != subject_index])
+        pairs = []
+        for pred_idx, agent_id in enumerate(object_ids):
+            if agent_id in agent_ids:
+                orig_idx = agent_ids.index(agent_id)
+            else:
+                continue
+            pairs.append((pred_idx, orig_idx, agent_id))
+
+    if len(pairs) == 0:
+        return
+
+    # chi-square value for 2 dof
+    s = 5.991 if alpha_level == 0.95 else 9.21 if alpha_level == 0.99 else 5.991
+
+    colors = plt.cm.get_cmap('tab20', len(pairs))
+    plt.figure(figsize=(6, 6))
+    for idx, (pred_idx, orig_idx, agent_id) in enumerate(pairs):
+        gt_final = gt_motion[orig_idx][-1].cpu().numpy()
+        samples_final = sample_motion[:, pred_idx, -1, :].cpu().numpy()  # K x 2
+        err = samples_final - gt_final  # K x 2
+
+        mu = (p[:, None] * err).sum(axis=0)
+        diff = err - mu
+        Sigma = np.zeros((2, 2))
+        for k in range(K):
+            Sigma += p[k] * np.outer(diff[k], diff[k])
+        Sigma += 1e-6 * np.eye(2)
+
+        eigval, eigvec = np.linalg.eigh(Sigma)
+        order = eigval.argsort()[::-1]
+        eigval, eigvec = eigval[order], eigvec[:, order]
+        width, height = 2 * np.sqrt(s * eigval)
+        angle = np.degrees(np.arctan2(eigvec[1, 0], eigvec[0, 0]))
+
+        color = colors(idx)
+        plt.scatter(err[:, 0], err[:, 1], s=6, color=color, alpha=0.4)
+        ell = Ellipse(xy=mu, width=width, height=height, angle=angle,
+                      edgecolor=color, facecolor='none', linestyle='--', linewidth=1.5,
+                      label=f'ID {int(agent_id)}')
+        plt.gca().add_patch(ell)
+
+    plt.xlabel('Error X')
+    plt.ylabel('Error Z')
+    plt.title(f"{data['seq']} frame {int(data['frame']):06d}")
+    plt.axis('equal')
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=8, ncol=2)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+
+def test_model(generator, save_dir, cfg, include_subject=False, plot_results=False, plot_limit=10):
     total_num_pred = 0
+    plot_count = 0
     while not generator.is_epoch_end():
         data = generator()
         if data is None:
@@ -109,6 +181,11 @@ def test_model(generator, save_dir, cfg, include_subject=False):
         num_pred = save_prediction(gt_motion_3D, data, '', gt_dir, include_subject=include_subject)              # save gt
         total_num_pred += num_pred
 
+        if plot_results and (plot_limit <= 0 or plot_count < plot_limit):
+            plot_path = os.path.join(save_dir, 'figures', f'{seq_name}_frame_{frame:06d}.png')
+            plot_error_ellipse(data, gt_motion_3D, sample_motion_eval, plot_path, include_subject=include_subject)
+            plot_count += 1
+
     print_log(f'\n\n total_num_pred: {total_num_pred}', log)
     if cfg.dataset == 'nuscenes_pred':
         scene_num = {
@@ -128,6 +205,8 @@ if __name__ == '__main__':
     parser.add_argument('--cached', action='store_true', default=False)
     parser.add_argument('--cleanup', action='store_true', default=False)
     parser.add_argument('--include_subject_eval', action='store_true', default=False, help='Include subject trajectory when saving predictions for evaluation')
+    parser.add_argument('--plot_results', action='store_true', default=False, help='Generate trajectory plots during evaluation')
+    parser.add_argument('--plot_limit', type=int, default=10, help='Max frames to plot when --plot_results is enabled; <=0 means no limit')
     args = parser.parse_args()
 
     """ setup """
@@ -165,7 +244,14 @@ if __name__ == '__main__':
             save_dir = f'{cfg.result_dir}/epoch_{epoch:04d}/{split}'; mkdir_if_missing(save_dir)
             eval_dir = f'{save_dir}/samples'
             if not args.cached:
-                test_model(generator, save_dir, cfg, include_subject=args.include_subject_eval)
+                test_model(
+                    generator,
+                    save_dir,
+                    cfg,
+                    include_subject=args.include_subject_eval,
+                    plot_results=args.plot_results,
+                    plot_limit=args.plot_limit,
+                )
 
             log_file = os.path.join(cfg.log_dir, 'log_eval.txt')
             cmd = f"python eval.py --dataset {cfg.dataset} --results_dir {eval_dir} --data {split} --log {log_file}"
