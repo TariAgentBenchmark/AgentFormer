@@ -144,7 +144,62 @@ def plot_error_ellipse(data, gt_motion, sample_motion, save_path, include_subjec
     plt.savefig(save_path, dpi=150)
     plt.close()
 
-def test_model(generator, save_dir, cfg, include_subject=False, plot_results=False, plot_limit=10):
+
+def plot_trajectories(data, pre_motion, gt_motion, sample_motion, save_path, include_subject=False, sample_idx=0):
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError("Plotting requires matplotlib. Install via `uv pip install matplotlib`.") from exc
+
+    agent_ids = data.get('agent_ids', data['valid_id'])
+    subject_index = data.get('subject_index', 0)
+
+    if include_subject:
+        pairs = [(i, i, agent_ids[i]) for i in range(len(agent_ids))]
+    else:
+        object_ids = data.get('object_ids', [agent_ids[i] for i in range(len(agent_ids)) if i != subject_index])
+        pairs = []
+        for pred_idx, agent_id in enumerate(object_ids):
+            if agent_id in agent_ids:
+                orig_idx = agent_ids.index(agent_id)
+            else:
+                continue
+            pairs.append((pred_idx, orig_idx, agent_id))
+
+    if len(pairs) == 0:
+        return
+
+    colors = {
+        'past': '#1f77b4',     # blue
+        'pred': '#2ca02c',     # green
+        'gt': '#d62728',       # red
+    }
+
+    plt.figure(figsize=(8, 6))
+    ax = plt.gca()
+
+    for pred_idx, orig_idx, agent_id in pairs:
+        past = pre_motion[orig_idx].cpu().numpy()
+        gt = gt_motion[orig_idx].cpu().numpy()
+        pred = sample_motion[sample_idx, pred_idx].cpu().numpy()
+
+        ax.plot(past[:, 0], past[:, 1], color=colors['past'], linewidth=2, label='Past Trajectory' if pred_idx == pairs[0][0] else None)
+        ax.plot(gt[:, 0], gt[:, 1], color=colors['gt'], linewidth=2, label='GT Future Trajectory' if pred_idx == pairs[0][0] else None)
+        ax.plot(pred[:, 0], pred[:, 1], color=colors['pred'], linewidth=2, label='Predicted Future Trajectory' if pred_idx == pairs[0][0] else None)
+        ax.text(past[-1, 0], past[-1, 1], f'{int(agent_id)}', fontsize=8, color='black')
+
+    ax.set_xlabel('x')
+    ax.set_ylabel('z')
+    ax.set_title(f"{data['seq']} frame {int(data['frame']):06d}")
+    ax.axis('equal')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=9)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+
+def test_model(generator, save_dir, cfg, include_subject=False, plot_results=False, plot_limit=10, plot_traj=False, traj_sample_idx=0):
     total_num_pred = 0
     plot_count = 0
     while not generator.is_epoch_end():
@@ -181,9 +236,14 @@ def test_model(generator, save_dir, cfg, include_subject=False, plot_results=Fal
         num_pred = save_prediction(gt_motion_3D, data, '', gt_dir, include_subject=include_subject)              # save gt
         total_num_pred += num_pred
 
-        if plot_results and (plot_limit <= 0 or plot_count < plot_limit):
-            plot_path = os.path.join(save_dir, 'figures', f'{seq_name}_frame_{frame:06d}.png')
-            plot_error_ellipse(data, gt_motion_3D, sample_motion_eval, plot_path, include_subject=include_subject)
+        if (plot_results or plot_traj) and (plot_limit <= 0 or plot_count < plot_limit):
+            if plot_results:
+                plot_path = os.path.join(save_dir, 'figures', f'{seq_name}_frame_{frame:06d}.png')
+                plot_error_ellipse(data, gt_motion_3D, sample_motion_eval, plot_path, include_subject=include_subject)
+            if plot_traj:
+                pre_motion_plot = torch.stack(data['pre_motion_3D'], dim=0) * cfg.traj_scale
+                plot_path_traj = os.path.join(save_dir, 'figures_traj', f'{seq_name}_frame_{frame:06d}.png')
+                plot_trajectories(data, pre_motion_plot, gt_motion_3D, sample_motion_eval, plot_path_traj, include_subject=include_subject, sample_idx=traj_sample_idx)
             plot_count += 1
 
     print_log(f'\n\n total_num_pred: {total_num_pred}', log)
@@ -207,6 +267,8 @@ if __name__ == '__main__':
     parser.add_argument('--include_subject_eval', action='store_true', default=False, help='Include subject trajectory when saving predictions for evaluation')
     parser.add_argument('--plot_results', action='store_true', default=False, help='Generate trajectory plots during evaluation')
     parser.add_argument('--plot_limit', type=int, default=10, help='Max frames to plot when --plot_results is enabled; <=0 means no limit')
+    parser.add_argument('--plot_traj', action='store_true', default=False, help='Plot past / GT future / predicted future trajectories')
+    parser.add_argument('--traj_sample_idx', type=int, default=0, help='Sample index used for trajectory plotting')
     args = parser.parse_args()
 
     """ setup """
@@ -251,6 +313,8 @@ if __name__ == '__main__':
                     include_subject=args.include_subject_eval,
                     plot_results=args.plot_results,
                     plot_limit=args.plot_limit,
+                    plot_traj=args.plot_traj,
+                    traj_sample_idx=args.traj_sample_idx,
                 )
 
             log_file = os.path.join(cfg.log_dir, 'log_eval.txt')
