@@ -148,8 +148,11 @@ def plot_error_ellipse(data, gt_motion, sample_motion, save_path, include_subjec
 def plot_trajectories(data, pre_motion, gt_motion, sample_motion, save_path, include_subject=False, sample_idx=0):
     try:
         import matplotlib.pyplot as plt
+        import numpy as np
     except ImportError as exc:
         raise RuntimeError("Plotting requires matplotlib. Install via `uv pip install matplotlib`.") from exc
+    if not hasattr(np, 'Inf'):
+        np.Inf = np.inf
 
     agent_ids = data.get('agent_ids', data['valid_id'])
     subject_index = data.get('subject_index', 0)
@@ -195,7 +198,6 @@ def plot_trajectories(data, pre_motion, gt_motion, sample_motion, save_path, inc
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=9)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.tight_layout()
     plt.savefig(save_path, dpi=150)
     plt.close()
 
