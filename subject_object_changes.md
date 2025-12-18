@@ -1,8 +1,6 @@
 # 主体-客体改动与可视化说明
 
-由于平台抽成高，后续合作可加微信：
-15637899910
-请勿在群里说这个，如有意愿直接加微信
+（概述近期主体-客体改动与可视化功能，便于同事了解使用。）
 
 ## 背景
 - 任务由“预测所有行人未来 12 帧”改为“随机选 1 个主体，其余为客体；输入主体/客体 8 帧历史 + 主体未来 6 帧，只预测客体未来 12 帧”。
@@ -38,10 +36,11 @@
   - 含主体：`python test.py --cfg eth_agentformer --gpu 0 --include_subject_eval`
 - 可视化  
   - 误差椭圆：`python test.py --cfg eth_agentformer --gpu 0 --plot_results --plot_limit 15`  
-  - 轨迹对比：`python test.py --cfg eth_agentformer --gpu 0 --plot_traj --plot_limit 15`  
-  - 不限数量：`--plot_limit 0`；含主体：加 `--include_subject_eval`；选择第 k 条采样画轨迹：`--traj_sample_idx k`
+  - 轨迹对比（主体 + 客体，客体用全部 K 条预测）：`python test.py --cfg eth_agentformer --gpu 0 --plot_traj --plot_limit 15`  
+  - 不限数量：`--plot_limit 0`；含主体：加 `--include_subject_eval`。
 
 ## 概率椭圆与采样数 K
 - 椭圆使用所有采样的末帧误差（当前等权重 `p=1/K`），`sample_k` 由 cfg 决定。如果把 `sample_k` 调到 100，代码无需修改，会自动用 100 条样本计算均值/协方差并绘制椭圆。
+- 轨迹对比同样绘制全部 K 条客体预测（浅色虚线）；增减 K 只需在 cfg 中改 `sample_k`。
 - 如需按采样概率加权，可在 `plot_error_ellipse` 中将 `p = np.ones(K)/K` 替换为实际概率，再用该权重计算 `mu` 与 `Sigma`。
 

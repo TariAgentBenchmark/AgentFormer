@@ -145,7 +145,7 @@ def plot_error_ellipse(data, gt_motion, sample_motion, save_path, include_subjec
     plt.close()
 
 
-def plot_trajectories(data, pre_motion, gt_motion, sample_motion, save_path, include_subject=False, sample_idx=0):
+def plot_trajectories(data, pre_motion, gt_motion, sample_motion, save_path, include_subject=False):
     try:
         import matplotlib.pyplot as plt
         import numpy as np
@@ -177,18 +177,36 @@ def plot_trajectories(data, pre_motion, gt_motion, sample_motion, save_path, inc
         'pred': '#2ca02c',     # green
         'gt': '#d62728',       # red
     }
+    K = sample_motion.shape[0]
 
     plt.figure(figsize=(8, 6))
     ax = plt.gca()
+    legend_flags = {'past': True, 'gt': True, 'pred': True}
 
     for pred_idx, orig_idx, agent_id in pairs:
         past = pre_motion[orig_idx].cpu().numpy()
         gt = gt_motion[orig_idx].cpu().numpy()
-        pred = sample_motion[sample_idx, pred_idx].cpu().numpy()
+        is_subject = (include_subject and orig_idx == subject_index)
 
-        ax.plot(past[:, 0], past[:, 1], color=colors['past'], linewidth=2, label='Past Trajectory' if pred_idx == pairs[0][0] else None)
-        ax.plot(gt[:, 0], gt[:, 1], color=colors['gt'], linewidth=2, label='GT Future Trajectory' if pred_idx == pairs[0][0] else None)
-        ax.plot(pred[:, 0], pred[:, 1], color=colors['pred'], linewidth=2, label='Predicted Future Trajectory' if pred_idx == pairs[0][0] else None)
+        if legend_flags['past']:
+            ax.plot(past[:, 0], past[:, 1], color=colors['past'], linewidth=2, label='Past Trajectory')
+            legend_flags['past'] = False
+        else:
+            ax.plot(past[:, 0], past[:, 1], color=colors['past'], linewidth=2)
+
+        if legend_flags['gt']:
+            ax.plot(gt[:, 0], gt[:, 1], color=colors['gt'], linewidth=2, label='GT Future Trajectory')
+            legend_flags['gt'] = False
+        else:
+            ax.plot(gt[:, 0], gt[:, 1], color=colors['gt'], linewidth=2)
+
+        if not is_subject:
+            for k in range(K):
+                pred_k = sample_motion[k, pred_idx].cpu().numpy()
+                lbl = 'Predicted Future Trajectory' if legend_flags['pred'] else None
+                ax.plot(pred_k[:, 0], pred_k[:, 1], color=colors['pred'], linewidth=1.5, linestyle='--', alpha=0.35, label=lbl)
+                legend_flags['pred'] = False
+
         ax.text(past[-1, 0], past[-1, 1], f'{int(agent_id)}', fontsize=8, color='black')
 
     ax.set_xlabel('x')
@@ -245,7 +263,7 @@ def test_model(generator, save_dir, cfg, include_subject=False, plot_results=Fal
             if plot_traj:
                 pre_motion_plot = torch.stack(data['pre_motion_3D'], dim=0) * cfg.traj_scale
                 plot_path_traj = os.path.join(save_dir, 'figures_traj', f'{seq_name}_frame_{frame:06d}.png')
-                plot_trajectories(data, pre_motion_plot, gt_motion_3D, sample_motion_eval, plot_path_traj, include_subject=include_subject, sample_idx=traj_sample_idx)
+                plot_trajectories(data, pre_motion_plot, gt_motion_3D, sample_motion_eval, plot_path_traj, include_subject=include_subject)
             plot_count += 1
 
     print_log(f'\n\n total_num_pred: {total_num_pred}', log)
@@ -269,8 +287,7 @@ if __name__ == '__main__':
     parser.add_argument('--include_subject_eval', action='store_true', default=False, help='Include subject trajectory when saving predictions for evaluation')
     parser.add_argument('--plot_results', action='store_true', default=False, help='Generate trajectory plots during evaluation')
     parser.add_argument('--plot_limit', type=int, default=10, help='Max frames to plot when --plot_results is enabled; <=0 means no limit')
-    parser.add_argument('--plot_traj', action='store_true', default=False, help='Plot past / GT future / predicted future trajectories')
-    parser.add_argument('--traj_sample_idx', type=int, default=0, help='Sample index used for trajectory plotting')
+    parser.add_argument('--plot_traj', action='store_true', default=False, help='Plot past / GT future / predicted future trajectories (all K samples)')
     args = parser.parse_args()
 
     """ setup """
@@ -316,7 +333,6 @@ if __name__ == '__main__':
                     plot_results=args.plot_results,
                     plot_limit=args.plot_limit,
                     plot_traj=args.plot_traj,
-                    traj_sample_idx=args.traj_sample_idx,
                 )
 
             log_file = os.path.join(cfg.log_dir, 'log_eval.txt')
